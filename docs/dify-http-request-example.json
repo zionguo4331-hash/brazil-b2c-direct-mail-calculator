@@ -1,0 +1,22 @@
+{
+  "scenario": "b2c_direct_mail",
+  "product_name": "Entry Silicone Product",
+  "retail_price_brl": 450,
+  "product_cogs_cny": 80,
+  "actual_weight_kg": 0.8,
+  "length_cm": 28.5,
+  "width_cm": 18,
+  "height_cm": 12.5,
+  "cny_to_usd": 0.14,
+  "brl_to_usd": 0.2,
+  "air_freight_usd_per_kg": 16.25,
+  "insurance_usd": 0,
+  "packaging_cost_usd": 0.6,
+  "payment_method": "pix",
+  "pix_fee_rate": 0.02,
+  "credit_card_fee_rate": 0.045,
+  "fx_spread_rate": 0.025,
+  "marketing_cpa_usd": 12,
+  "target_margin": 0.3,
+  "volumetric_divisor": 6000
+}

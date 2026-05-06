@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>巴西 SKU 定价与履约利润计算器</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Brazil SKU Pricing & Fulfillment Profitability</p>
+        <h1>巴西 SKU 定价与履约利润计算器</h1>
+        <p class="hero-copy">
+          同时支持中国直邮、巴西本地 3PF、Mercado Livre 和 Shopee Brazil 的渠道费用与履约利润分析。
+        </p>
+      </section>
+
+      <section class="layout">
+        <form id="calculator-form" class="panel form-grid">
+          <h2>输入参数</h2>
+
+          <label>
+            <span>履约模式</span>
+            <select name="fulfillment_mode">
+              <option value="china_direct_mail_air">中国直邮空运</option>
+              <option value="china_direct_mail_sea">中国直邮海运</option>
+              <option value="brazil_local_3pf">巴西本地 3PF</option>
+              <option value="mercado_livre_full">Mercado Livre Full</option>
+              <option value="shopee_3pf">Shopee 3PF</option>
+            </select>
+          </label>
+          <label>
+            <span>销售渠道</span>
+            <select name="sales_channel">
+              <option value="d2c_independent_site">独立站 D2C</option>
+              <option value="mercado_livre_classic">Mercado Livre Classic</option>
+              <option value="mercado_livre_premium">Mercado Livre Premium</option>
+              <option value="shopee_brazil">Shopee Brazil</option>
+            </select>
+          </label>
+
+          <label>
+            <span>支付方式</span>
+            <select name="payment_method">
+              <option value="credit_card">信用卡</option>
+              <option value="pix">Pix</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label>
+            <span>平台渠道启用支付费</span>
+            <select name="payment_fee_enabled">
+              <option value="false">否</option>
+              <option value="true">是</option>
+            </select>
+          </label>
+          <label>
+            <span>平台渠道启用 FX 损耗</span>
+            <select name="fx_spread_enabled">
+              <option value="false">否</option>
+              <option value="true">是</option>
+            </select>
+          </label>
+
+          <label>
+            <span>产品成本 CNY</span>
+            <input name="product_cogs_cny" type="number" min="0" step="0.01" value="100" required />
+          </label>
+          <label class="rate-with-action">
+            <span>CNY → USD</span>
+            <div class="inline-field">
+              <input name="cny_to_usd" type="number" min="0" step="0.0001" value="0.14" required />
+              <button type="button" id="refresh-rates" class="ghost-button">刷新汇率</button>
+            </div>
+          </label>
+          <label>
+            <span>BRL → USD</span>
+            <input name="brl_to_usd" type="number" min="0" step="0.0001" value="0.2" required />
+          </label>
+          <label>
+            <span>巴西售价 BRL</span>
+            <input name="retail_price_brl" type="number" min="0" step="0.01" value="199" required />
+          </label>
+
+          <label>
+            <span>信用卡费率</span>
+            <input name="credit_card_fee_rate" type="number" min="0" max="1" step="0.0001" value="0.0399" />
+          </label>
+          <label>
+            <span>Pix 费率</span>
+            <input name="pix_fee_rate" type="number" min="0" max="1" step="0.0001" value="0.0099" />
+          </label>
+          <label>
+            <span>FX 损耗率</span>
+            <input name="fx_spread_rate" type="number" min="0" max="1" step="0.0001" value="0.01" />
+          </label>
+          <label>
+            <span>目标净利率</span>
+            <input name="target_net_margin" type="number" min="0" max="0.95" step="0.0001" value="0.3" />
+          </label>
+
+          <label>
+            <span>实重 kg</span>
+            <input name="actual_weight_kg" type="number" min="0" step="0.001" value="0.4" required />
+          </label>
+          <label>
+            <span>长 cm</span>
+            <input name="length_cm" type="number" min="0" step="0.1" value="20" required />
+          </label>
+          <label>
+            <span>宽 cm</span>
+            <input name="width_cm" type="number" min="0" step="0.1" value="15" required />
+          </label>
+          <label>
+            <span>高 cm</span>
+            <input name="height_cm" type="number" min="0" step="0.1" value="10" required />
+          </label>
+
+          <label data-mode="direct">
+            <span>空运抛重系数</span>
+            <input name="volumetric_divisor" type="number" min="1" step="1" value="6000" />
+          </label>
+          <label data-mode="direct">
+            <span>空运单价 USD/kg</span>
+            <input name="air_freight_usd_per_kg" type="number" min="0" step="0.01" value="12" />
+          </label>
+          <label data-mode="direct">
+            <span>海运单价 USD/CBM</span>
+            <input name="sea_freight_usd_per_cbm" type="number" min="0" step="0.01" value="180" />
+          </label>
+          <label data-mode="direct">
+            <span>海运 RT 换算 kg</span>
+            <input name="sea_freight_density_divisor" type="number" min="1" step="1" value="1000" />
+          </label>
+          <label data-mode="direct">
+            <span>保险 USD</span>
+            <input name="insurance_usd" type="number" min="0" step="0.01" value="1" />
+          </label>
+          <label data-mode="direct">
+            <span>中国包材 USD</span>
+            <input name="packaging_cost_usd" type="number" min="0" step="0.01" value="0.5" />
+          </label>
+
+          <div class="section-title" data-mode="local">本地仓费用</div>
+
+          <label data-mode="local">
+            <span>库存到仓单件成本 USD</span>
+            <input name="inventory_landed_cost_per_unit_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label data-mode="local">
+            <span>仓储计费方式</span>
+            <select name="storage_fee_mode">
+              <option value="per_unit">按件</option>
+              <option value="per_cbm">按 CBM</option>
+            </select>
+          </label>
+          <label data-mode="local">
+            <span>仓储费 USD/件/月</span>
+            <input name="storage_fee_usd_per_unit_month" type="number" min="0" step="0.01" value="0.2" />
+          </label>
+          <label data-mode="local">
+            <span>仓储费 USD/CBM/月</span>
+            <input name="storage_fee_usd_per_cbm_month" type="number" min="0" step="0.01" value="20" />
+          </label>
+          <label data-mode="local">
+            <span>平均库存天数</span>
+            <input name="avg_storage_days" type="number" min="0" step="1" value="30" />
+          </label>
+          <label data-mode="local">
+            <span>入库费 USD/件</span>
+            <input name="inbound_fee_usd_per_unit" type="number" min="0" step="0.01" value="0.2" />
+          </label>
+          <label data-mode="local">
+            <span>出库基础费 USD</span>
+            <input name="pick_pack_base_fee_usd" type="number" min="0" step="0.01" value="3.5" />
+          </label>
+          <label data-mode="local">
+            <span>拣货费 USD/件</span>
+            <input name="pick_fee_usd_per_item" type="number" min="0" step="0.01" value="0.5" />
+          </label>
+          <label data-mode="local">
+            <span>加件拣货费 USD</span>
+            <input name="pick_fee_usd_per_additional_item" type="number" min="0" step="0.01" value="0.5" />
+          </label>
+          <label data-mode="local">
+            <span>订单件数</span>
+            <input name="items_per_order" type="number" min="1" step="1" value="1" />
+          </label>
+          <label data-mode="local">
+            <span>本地包材 USD</span>
+            <input name="local_packaging_cost_usd" type="number" min="0" step="0.01" value="0.4" />
+          </label>
+          <label data-mode="local">
+            <span>本地尾程快递 USD</span>
+            <input name="last_mile_delivery_usd" type="number" min="0" step="0.01" value="4.0" />
+          </label>
+          <label data-mode="local">
+            <span>退货率</span>
+            <input name="return_rate" type="number" min="0" max="1" step="0.0001" value="0.03" />
+          </label>
+          <label data-mode="local">
+            <span>退货处理费 USD</span>
+            <input name="return_handling_fee_usd" type="number" min="0" step="0.01" value="1.0" />
+          </label>
+          <label data-mode="local">
+            <span>逆向物流费 USD</span>
+            <input name="reverse_shipping_usd" type="number" min="0" step="0.01" value="4.0" />
+          </label>
+          <label data-mode="local">
+            <span>不可二次销售比例</span>
+            <input name="non_resellable_rate" type="number" min="0" max="1" step="0.0001" value="0.5" />
+          </label>
+
+          <div class="section-title">渠道及营销</div>
+
+          <label>
+            <span>Mercado Livre Classic 佣金率</span>
+            <input name="mercado_livre_classic_commission_rate" type="number" min="0" max="1" step="0.0001" value="0.125" />
+          </label>
+          <label>
+            <span>Mercado Livre Premium 佣金率</span>
+            <input name="mercado_livre_premium_commission_rate" type="number" min="0" max="1" step="0.0001" value="0.17" />
+          </label>
+          <label>
+            <span>Mercado Livre 物流费 USD</span>
+            <input name="mercado_livre_logistics_fee_usd" type="number" min="0" step="0.01" value="4.0" />
+          </label>
+          <label>
+            <span>Shopee 佣金率</span>
+            <input name="shopee_commission_rate" type="number" min="0" max="1" step="0.0001" value="0.12" />
+          </label>
+          <label>
+            <span>Shopee 交易费率</span>
+            <input name="shopee_transaction_fee_rate" type="number" min="0" max="1" step="0.0001" value="0.02" />
+          </label>
+          <label data-mode="shopee">
+            <span>Shopee 服务费率</span>
+            <input name="shopee_service_fee_rate" type="number" min="0" max="1" step="0.0001" value="0" />
+          </label>
+          <label data-mode="shopee">
+            <span>活动折扣率</span>
+            <input name="shopee_campaign_discount_rate" type="number" min="0" max="1" step="0.0001" value="0" />
+          </label>
+          <label data-mode="shopee">
+            <span>优惠券成本 USD</span>
+            <input name="shopee_coupon_cost_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label data-mode="shopee">
+            <span>免邮补贴 USD</span>
+            <input name="shopee_free_shipping_subsidy_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label data-mode="shopee">
+            <span>Shopee 站内广告 USD</span>
+            <input name="shopee_ads_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label>
+            <span>Marketplace Ads USD</span>
+            <input name="marketplace_ads_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label>
+            <span>广告 CPA USD</span>
+            <input name="marketing_cpa_usd" type="number" min="0" step="0.01" value="2" />
+          </label>
+          <label>
+            <span>达人佣金 USD</span>
+            <input name="influencer_commission_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label>
+            <span>折扣成本 USD</span>
+            <input name="discount_cost_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+          <label>
+            <span>退货准备金 USD</span>
+            <input name="return_reserve_usd" type="number" min="0" step="0.01" value="0" />
+          </label>
+
+          <button type="submit" class="button">立即计算</button>
+          <p id="fx-status" class="fx-status">汇率状态：未刷新</p>
+          <p id="form-error" class="form-error" hidden></p>
+        </form>
+
+        <section class="results">
+          <article class="panel result-card accent">
+            <h2>利润总览</h2>
+            <div id="profit-summary" class="metric-grid"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>售价反推</h2>
+            <div id="reverse-price-summary" class="metric-grid"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>直邮拆解</h2>
+            <div id="direct-mail-summary" class="metric-grid"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>本地仓拆解</h2>
+            <div id="local-warehouse-summary" class="metric-grid"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>渠道成本拆解</h2>
+            <div id="channel-summary" class="metric-grid"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>Shopee 3PF 拆解</h2>
+            <div id="shopee-summary" class="metric-grid"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>预警</h2>
+            <div id="warnings" class="warning-list"></div>
+          </article>
+
+          <article class="panel result-card">
+            <h2>公式与逻辑</h2>
+            <div id="formula-notes" class="formula-list"></div>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+  </html>
