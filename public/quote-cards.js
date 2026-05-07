@@ -1,17 +1,12 @@
 import { DEFAULTS } from "./defaults.js";
+import { lookupBrazilPostalZone } from "./postal-utils.js";
 
 export const DEFAULT_CONFIRMATION_QUESTIONS = [
-  "这份报价是否发往巴西？",
-  "这是空运、海运还是 3PF 报价？",
+  "货代是否书面确认我们的产品可以承运？",
   "是否包含巴西本地尾程派送？",
-  "是否包含清关？",
+  "是否包含清关服务？",
   "是否包含进口税？",
-  "是否适用于我们的产品类型？",
-  "是否有敏感货附加费？",
-  "是否有电池附加费？",
-  "是否有偏远地区附加费？",
-  "报价有效期是否正确？",
-  "报价币种是否正确？"
+  "报价是否仍在有效期内？"
 ].map((question) => ({
   question,
   answer: "",
@@ -76,6 +71,24 @@ export const QUOTE_CARD_TEMPLATE = {
   confirmed_by: "",
   version: 1,
   parent_quote_id: "",
+  review_level: "needs_business_check",
+  selected_product_code: "",
+  available_product_codes: [],
+  tax_mode: "system_formula",
+  forwarder_tax_service_fee_rate: 0.07,
+  use_forwarder_tax_service_fee: false,
+  tail_zone_mode: "cep_lookup",
+  main_prc_rates: [],
+  handling_fee_tiers: [],
+  tail_delivery_matrix: {
+    zones: [],
+    weight_columns: [],
+    entries: []
+  },
+  postal_zone_map: {
+    entries: []
+  },
+  restriction_notes: [],
   created_at: "",
   updated_at: ""
 };
@@ -191,6 +204,23 @@ function normalizeQuestionsForUser(rawQuestions, useDefaults = false) {
   }));
 }
 
+function deriveReviewLevel(quoteCard, validation) {
+  const hasMainRate = (quoteCard.main_prc_rates?.length || 0) > 0 || quoteCard.per_kg_usd > 0 || quoteCard.per_cbm_usd > 0 || quoteCard.fixed_per_order_usd > 0;
+  const hasTailMatrix = (quoteCard.tail_delivery_matrix?.entries?.length || 0) > 0 || quoteCard.last_mile_delivery_usd > 0;
+  const hasPostalMap = (quoteCard.postal_zone_map?.entries?.length || 0) > 0;
+
+  if (!hasMainRate) {
+    return "cannot_use";
+  }
+  if (!hasTailMatrix) {
+    return "needs_logistics_review";
+  }
+  if (validation.missing_fields.length > 0 || !hasPostalMap) {
+    return "needs_business_check";
+  }
+  return "ready_to_confirm";
+}
+
 function modeToFulfillmentMode(mode) {
   if (mode === "air_direct_mail") {
     return "china_direct_mail_air";
@@ -205,6 +235,22 @@ function modeToFulfillmentMode(mode) {
     return "shopee_3pf";
   }
   return "brazil_local_3pf";
+}
+
+function findPrCMainRate(quoteCard, productCode) {
+  return quoteCard.main_prc_rates.find((item) => item.product_code === productCode) || quoteCard.main_prc_rates[0] || null;
+}
+
+function findHandlingTier(quoteCard, weightKg) {
+  return quoteCard.handling_fee_tiers.find((item) => weightKg >= Number(item.min_weight_kg || 0) && weightKg <= Number(item.max_weight_kg || Number.MAX_SAFE_INTEGER)) || null;
+}
+
+function findTailDeliveryEntry(quoteCard, zone, weightKg) {
+  return quoteCard.tail_delivery_matrix.entries.find((item) => {
+    const minWeight = Number(item.min_weight_kg || 0);
+    const maxWeight = Number(item.max_weight_kg || Number.MAX_SAFE_INTEGER);
+    return item.zone === zone && weightKg >= minWeight && weightKg <= maxWeight;
+  }) || null;
 }
 
 export function getQuoteModeLabel(mode) {
@@ -357,6 +403,18 @@ export function normalizeQuoteCard(rawQuoteCard) {
   quoteCard.confirmed_by = quoteCard.confirmed_by || "";
   quoteCard.confirmed_at = quoteCard.confirmed_at || "";
   quoteCard.parent_quote_id = quoteCard.parent_quote_id || "";
+  quoteCard.available_product_codes = Array.isArray(quoteCard.available_product_codes) ? quoteCard.available_product_codes : [];
+  quoteCard.main_prc_rates = Array.isArray(quoteCard.main_prc_rates) ? quoteCard.main_prc_rates : [];
+  quoteCard.handling_fee_tiers = Array.isArray(quoteCard.handling_fee_tiers) ? quoteCard.handling_fee_tiers : [];
+  quoteCard.tail_delivery_matrix = {
+    zones: Array.isArray(quoteCard.tail_delivery_matrix?.zones) ? quoteCard.tail_delivery_matrix.zones : [],
+    weight_columns: Array.isArray(quoteCard.tail_delivery_matrix?.weight_columns) ? quoteCard.tail_delivery_matrix.weight_columns : [],
+    entries: Array.isArray(quoteCard.tail_delivery_matrix?.entries) ? quoteCard.tail_delivery_matrix.entries : []
+  };
+  quoteCard.postal_zone_map = {
+    entries: Array.isArray(quoteCard.postal_zone_map?.entries) ? quoteCard.postal_zone_map.entries : []
+  };
+  quoteCard.restriction_notes = Array.isArray(quoteCard.restriction_notes) ? quoteCard.restriction_notes : [];
 
   const validation = validateQuoteCard(quoteCard);
   if (
@@ -369,6 +427,7 @@ export function normalizeQuoteCard(rawQuoteCard) {
     quoteCard.status = validation.suggested_status;
   }
   quoteCard.validation = validation;
+  quoteCard.review_level = deriveReviewLevel(quoteCard, validation);
   quoteCard.can_participate_in_calculation = quoteCard.status !== "disabled";
 
   return quoteCard;
@@ -453,13 +512,31 @@ export function evaluateQuoteConfirmation(quoteCard, answers) {
     questions_for_user: normalizeQuestionsForUser(answers || quoteCard.questions_for_user, quoteCard.source === "ai_extracted")
   });
   const unansweredRequired = normalized.questions_for_user.filter((item) => item.required && !["yes", "no"].includes(item.answer));
+  const blockingIssues = [];
+  if (!normalized.selected_product_code && normalized.available_product_codes.length > 0) {
+    blockingIssues.push("请选择产品代码");
+  }
+  if (!normalized.tax_mode) {
+    blockingIssues.push("请选择税费模式");
+  }
+  if (!normalized.tail_zone_mode) {
+    blockingIssues.push("请选择尾程区域获取方式");
+  }
+  if (normalized.tail_zone_mode === "cep_lookup" && normalized.tail_delivery_matrix.entries.length === 0) {
+    blockingIssues.push("缺少尾程矩阵，无法使用 CEP 模式");
+  }
+  if (unansweredRequired.length > 0) {
+    blockingIssues.push("存在必填业务问题未完成");
+  }
 
   return {
     quoteCard: normalized,
     unansweredRequired,
+    blockingIssues,
     can_confirm:
       normalized.validation.can_confirm &&
       unansweredRequired.length === 0 &&
+      blockingIssues.length === 0 &&
       normalized.status !== "expired",
     has_low_confidence: normalized.confidence_summary.overall === "low" || normalized.confidence_summary.low_confidence_fields.length > 0
   };
@@ -545,8 +622,50 @@ export function calculateFreightFromQuoteCard(sku, rawQuoteCard, options = {}) {
 
   let freight_usd = 0;
   let freight_method = `${quoteCard.mode}:${quoteCard.billing_method}`;
+  let matched_postal_zone = null;
+  let matched_tail_delivery_entry = null;
 
-  if (quoteCard.mode === "air_direct_mail" && quoteCard.billing_method === "per_kg") {
+  if (quoteCard.main_prc_rates.length > 0) {
+    const selectedProductCode = sku.selected_product_code || quoteCard.selected_product_code || quoteCard.available_product_codes[0] || "";
+    const mainRate = findPrCMainRate(quoteCard, selectedProductCode);
+    const handlingTier = findHandlingTier(quoteCard, chargeable_weight_kg);
+    const tailZoneMode = sku.tail_zone_mode || quoteCard.tail_zone_mode || "cep_lookup";
+    let zone = sku.manual_tail_zone || "";
+
+    if (tailZoneMode === "cep_lookup" && sku.destination_cep && quoteCard.postal_zone_map.entries.length > 0) {
+      const lookup = lookupBrazilPostalZone(sku.destination_cep, quoteCard.postal_zone_map);
+      if (lookup.found) {
+        matched_postal_zone = lookup;
+        zone = lookup.zone;
+      } else {
+        warnings.push({
+          code: lookup.warning || "CEP_NOT_FOUND_IN_ZONE_MAP",
+          severity: "warning",
+          message: "未找到该 CEP 对应区域，请检查 CEP 或手动选择区域。"
+        });
+      }
+    }
+
+    if (tailZoneMode === "cep_lookup" && !sku.destination_cep) {
+      warnings.push({
+        code: "CEP_NOT_PROVIDED",
+        severity: "info",
+        message: "未输入 CEP，当前尾程区域为手动估算。"
+      });
+    }
+
+    if (zone) {
+      matched_tail_delivery_entry = findTailDeliveryEntry(quoteCard, zone, chargeable_weight_kg);
+    }
+
+    const mainRateCnyPerKg = Number(mainRate?.per_kg_cny || mainRate?.per_kg || 0);
+    const handlingFeeCny = Number(handlingTier?.fee_cny || 0);
+    const tailFeeCny = Number(matched_tail_delivery_entry?.fee_cny || 0);
+    const cnyToUsd = Number(sku.cny_to_usd || options.cny_to_usd || 0);
+
+    freight_usd = (mainRateCnyPerKg * chargeable_weight_kg + handlingFeeCny + tailFeeCny) * cnyToUsd;
+    freight_method = "prc_package";
+  } else if (quoteCard.mode === "air_direct_mail" && quoteCard.billing_method === "per_kg") {
     freight_usd = toNumber(quoteCard.base_fee_usd) + chargeable_weight_kg * toNumber(quoteCard.per_kg_usd);
     if (quoteCard.min_charge_usd > 0) {
       freight_usd = Math.max(quoteCard.min_charge_usd, freight_usd);
@@ -625,6 +744,8 @@ export function calculateFreightFromQuoteCard(sku, rawQuoteCard, options = {}) {
     quote_status: quoteCard.status,
     quote_name: quoteCard.quote_name,
     forwarder_name: quoteCard.forwarder_name,
+    matched_postal_zone,
+    matched_tail_delivery_entry,
     mapped_local_costs: {
       storage_fee_usd_per_unit_month: quoteCard.storage_fee_usd_per_unit_month,
       inbound_fee_usd_per_unit: quoteCard.inbound_fee_usd_per_unit,

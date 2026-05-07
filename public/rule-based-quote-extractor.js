@@ -1,5 +1,70 @@
 import { createEmptyQuoteCard } from "./quote-cards.js";
 
+function detectProductCodes(text) {
+  return Array.from(new Set((text.match(/BR\d{4}/g) || [])));
+}
+
+function parsePostalZoneRows(rows) {
+  const entries = [];
+  for (const row of rows) {
+    const text = row.text;
+    const matches = text.match(/\d{5}-?\d{3}|\d{8}/g) || [];
+    if (matches.length >= 2) {
+      const zoneMatch = text.match(/\b[A-Z]{2}-(?:CAP|INT\d?)\b/i);
+      entries.push({
+        postcode_start: Number(matches[0].replace(/\D/g, "")),
+        postcode_end: Number(matches[1].replace(/\D/g, "")),
+        zone: zoneMatch ? zoneMatch[0].toUpperCase() : "UNKNOWN",
+        city: "",
+        state: "",
+        state_code: zoneMatch ? zoneMatch[0].slice(0, 2).toUpperCase() : "",
+        region: ""
+      });
+    }
+  }
+  return entries.sort((left, right) => left.postcode_start - right.postcode_start);
+}
+
+function parseTailDeliveryRows(rows, currency, rates, warnings) {
+  const entries = [];
+  const zones = new Set();
+  for (const row of rows) {
+    const text = row.text;
+    const zoneMatch = text.match(/\b[A-Z]{2}-(?:CAP|INT\d?)\b/i);
+    const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)/);
+    const numbers = text.match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+    if (zoneMatch && rangeMatch && numbers.length >= 3) {
+      const fee = numbers[numbers.length - 1];
+      const zone = zoneMatch[0].toUpperCase();
+      zones.add(zone);
+      entries.push({
+        zone,
+        min_weight_kg: Number(rangeMatch[1]),
+        max_weight_kg: Number(rangeMatch[2]),
+        fee_cny: currency === "USD" ? Number((fee / Math.max(rates.cny_to_usd || 1, 0.0001)).toFixed(4)) : fee
+      });
+    }
+  }
+  return { zones: Array.from(zones), entries };
+}
+
+function parseMainPrcRates(rows) {
+  const rates = [];
+  for (const row of rows) {
+    const text = row.text;
+    const productCode = text.match(/BR\d{4}/)?.[0];
+    const numbers = text.match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+    if (productCode && numbers.length) {
+      const perKg = numbers[numbers.length - 1];
+      rates.push({
+        product_code: productCode,
+        per_kg_cny: perKg
+      });
+    }
+  }
+  return rates;
+}
+
 function detectCurrency(text) {
   if (/USD|US\$/i.test(text)) {
     return "USD";
@@ -111,6 +176,7 @@ function setFieldIfNumber(target, field, rowText, currency, rates, warnings) {
 
 export function ruleBasedQuoteExtractor(workbookData, options = {}) {
   const selectedSheets = workbookData.sheets.filter((sheet) => !options.selectedSheetNames || options.selectedSheetNames.includes(sheet.name));
+  const workbookText = selectedSheets.map((sheet) => sheet.rows.map((row) => row.text).join("\n")).join("\n");
   const quote_cards = [];
   const extracted_fields = [];
   const missing_fields = [];
@@ -119,6 +185,72 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
     cny_to_usd: Number(options.cny_to_usd || 0),
     brl_to_usd: Number(options.brl_to_usd || 0)
   };
+
+  const productCodes = detectProductCodes(workbookText);
+  const postalEntries = parsePostalZoneRows(selectedSheets.flatMap((sheet) => sheet.rows));
+  const tailDelivery = parseTailDeliveryRows(selectedSheets.flatMap((sheet) => sheet.rows), "CNY", rates, warnings);
+  const mainPrcRates = parseMainPrcRates(selectedSheets.flatMap((sheet) => sheet.rows));
+
+  if (/PRC|商业清关|邮编|CEP|尾程|BR1001|BR1002|BR1006/i.test(workbookText) && (mainPrcRates.length || postalEntries.length || tailDelivery.entries.length)) {
+    const packageCard = createEmptyQuoteCard({
+      quote_name: `${workbookData.fileName} - PRC 报价包草稿`,
+      forwarder_name: workbookData.fileName.replace(/\.xlsx$/i, ""),
+      mode: "air_direct_mail",
+      country: "Brazil",
+      currency: "CNY",
+      billing_method: "per_kg",
+      source: "rule_extracted",
+      status: "needs_review",
+      imported_at: workbookData.generatedAt,
+      original_file_name: workbookData.fileName,
+      original_text_excerpt: workbookText.slice(0, 1200),
+      available_product_codes: productCodes,
+      selected_product_code: productCodes[0] || "",
+      main_prc_rates: mainPrcRates,
+      tail_delivery_matrix: {
+        zones: tailDelivery.zones,
+        weight_columns: [],
+        entries: tailDelivery.entries
+      },
+      postal_zone_map: {
+        entries: postalEntries
+      },
+      restriction_notes: /Device|Sexy|Sexual|Adult product|Battery/i.test(workbookText)
+        ? ["系统检测到禁运/限制词，需业务确认货代是否书面允许承运。"]
+        : [],
+      notes: "由前端 Excel 预处理器识别为 PRC 复合报价包草稿，需人工确认。"
+    });
+
+    if (mainPrcRates.length) {
+      extracted_fields.push("main_prc_rates");
+    }
+    if (tailDelivery.entries.length) {
+      extracted_fields.push("tail_delivery_matrix");
+    }
+    if (postalEntries.length) {
+      extracted_fields.push("postal_zone_map");
+    }
+    if (!mainPrcRates.length) {
+      missing_fields.push("main_prc_rates");
+    }
+    if (!tailDelivery.entries.length) {
+      missing_fields.push("tail_delivery_matrix");
+      warnings.push({
+        code: "PRC_TAIL_MATRIX_MISSING",
+        severity: "warning",
+        message: "已识别 PRC 主报价，但尾程矩阵缺失，请复核。"
+      });
+    }
+    if (!postalEntries.length) {
+      missing_fields.push("postal_zone_map");
+      warnings.push({
+        code: "PRC_POSTAL_ZONE_MAP_MISSING",
+        severity: "warning",
+        message: "已识别 PRC 主报价，但邮编区域表缺失，请复核。"
+      });
+    }
+    quote_cards.push(packageCard);
+  }
 
   for (const sheet of selectedSheets) {
     const fullText = sheet.rows.map((row) => row.text).join("\n");
@@ -257,7 +389,9 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
       missing_fields.push("country");
     }
 
-    quote_cards.push(quoteCard);
+    if (!quote_cards.some((item) => item.quote_name === quoteCard.quote_name)) {
+      quote_cards.push(quoteCard);
+    }
   }
 
   return {

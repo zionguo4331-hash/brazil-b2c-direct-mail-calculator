@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
     <main class="page">
       <section class="hero">
         <p class="eyebrow">Brazil SKU Profit & Freight Quote Decision Tool MVP</p>
@@ -126,6 +127,33 @@
             <label>
               <span>订单件数</span>
               <input name="items_per_order" type="number" min="1" step="1" value="1" />
+            </label>
+            <label>
+              <span>巴西收件 CEP</span>
+              <input name="destination_cep" type="text" placeholder="例如 01001-001" />
+              <small>如果知道巴西收件人 CEP，建议输入 CEP 自动匹配尾程区域；如果不知道，可以手动选择常见区域进行估算。</small>
+            </label>
+            <label>
+              <span>手动尾程区域</span>
+              <select name="manual_tail_zone" id="manual-tail-zone">
+                <option value="">自动或未选择</option>
+              </select>
+            </label>
+            <label>
+              <span>税费模式</span>
+              <select name="tax_mode">
+                <option value="system_formula">使用系统税费公式</option>
+                <option value="forwarder_tax_model">使用货代代缴税模型</option>
+                <option value="manual_tax_input">手动输入税费</option>
+                <option value="skip_tax">暂不计算税费</option>
+              </select>
+            </label>
+            <label>
+              <span>代缴税手续费 7%</span>
+              <select name="use_forwarder_tax_service_fee">
+                <option value="false">否</option>
+                <option value="true">是</option>
+              </select>
             </label>
 
             <label>
@@ -353,6 +381,11 @@
             <article class="panel result-card">
               <h2>报价卡使用情况</h2>
               <div id="quote-summary" class="metric-grid"></div>
+            </article>
+
+            <article class="panel result-card">
+              <h2>PRC 报价包与尾程匹配</h2>
+              <div id="prc-summary" class="metric-grid"></div>
             </article>
 
             <article class="panel result-card">

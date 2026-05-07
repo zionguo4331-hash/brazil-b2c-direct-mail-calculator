@@ -1,4 +1,5 @@
 import { calculateBrazilB2CDirectMailCost } from "./calculator-core.js";
+import { lookupBrazilPostalZone, normalizeBrazilCep } from "./postal-utils.js";
 import {
   QUOTE_CARD_FIELDS,
   QUOTE_MODE_OPTIONS,
@@ -48,6 +49,7 @@ const displayModeToggle = document.querySelector("#display-mode-toggle");
 const quoteSelect = document.querySelector("#selected-quote-id");
 const profitSummary = document.querySelector("#profit-summary");
 const quoteSummary = document.querySelector("#quote-summary");
+const prcSummary = document.querySelector("#prc-summary");
 const reversePriceSummary = document.querySelector("#reverse-price-summary");
 const directMailSummary = document.querySelector("#direct-mail-summary");
 const localWarehouseSummary = document.querySelector("#local-warehouse-summary");
@@ -80,6 +82,7 @@ const excelPreprocessSummaryNode = document.querySelector("#excel-preprocess-sum
 const excelSheetSelectorNode = document.querySelector("#excel-sheet-selector");
 const excelRulePreviewNode = document.querySelector("#excel-rule-preview");
 const excelAiReadableTextInput = document.querySelector("#excel-ai-readable-text");
+const toastRegion = document.querySelector("#toast-region");
 
 const skuCsvFileInput = document.querySelector("#sku-csv-file");
 const importQuoteCardsFileInput = document.querySelector("#import-quote-cards-file");
@@ -151,6 +154,29 @@ const state = {
   workbookDraft: null,
   selectedWorkbookSheets: []
 };
+
+function showToast(type, message) {
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toastRegion.appendChild(toast);
+  window.setTimeout(() => {
+    toast.remove();
+  }, 2800);
+}
+
+function setButtonLoading(button, loadingText) {
+  if (!button) {
+    return () => {};
+  }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = loadingText;
+  return () => {
+    button.disabled = false;
+    button.textContent = original;
+  };
+}
 
 function formatCurrency(value, currency = "USD") {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -727,6 +753,16 @@ function runSingleCalculation(payload) {
     payload: finalPayload,
     result: {
       ...result,
+      applied_parameters: {
+        ...result.applied_parameters,
+        selected_product_code: finalPayload.selected_product_code || finalPayload.selected_quote_card?.selected_product_code || "",
+        tax_mode: finalPayload.tax_mode,
+        manual_tail_zone: finalPayload.manual_tail_zone,
+        prc_main_freight_usd: quoteMeta?.freight_method === "prc_package" ? roundValue((quoteMeta.freight_usd || 0) - (quoteMeta.matched_tail_delivery_entry ? Number((quoteMeta.matched_tail_delivery_entry.fee_cny || 0) * (finalPayload.cny_to_usd || 0)).toFixed(4) : 0), 4) : 0,
+        prc_handling_fee_usd: 0,
+        prc_tail_delivery_fee_usd: quoteMeta?.matched_tail_delivery_entry ? roundValue((quoteMeta.matched_tail_delivery_entry.fee_cny || 0) * (finalPayload.cny_to_usd || 0), 4) : 0,
+        prc_total_logistics_usd: quoteMeta?.freight_usd || 0
+      },
       warnings: combinedWarnings
     },
     quoteMeta
@@ -817,6 +853,22 @@ function renderResult(output, quoteMeta) {
     metric("Shopee 渠道总成本", formatCurrency(output.shopee_3pf_breakdown.shopee_channel_cost_usd, "USD")),
     metric("本地 3PF 总成本", formatCurrency(output.shopee_3pf_breakdown.local_3pf_cost_usd, "USD"))
   ].join("");
+
+  prcSummary.innerHTML = quoteMeta && quoteMeta.freight_method === "prc_package"
+    ? [
+      metric("当前报价包", quoteMeta.quote_name),
+      metric("产品代码", output.applied_parameters.selected_product_code || "未选择"),
+      metric("当前区域", quoteMeta.matched_postal_zone?.zone || output.applied_parameters.manual_tail_zone || "手动估算"),
+      metric("税费模式", output.applied_parameters.tax_mode || "system_formula"),
+      metric("主运费", formatCurrency(output.applied_parameters.prc_main_freight_usd || 0, "USD")),
+      metric("处理费", formatCurrency(output.applied_parameters.prc_handling_fee_usd || 0, "USD")),
+      metric("尾程派送费", formatCurrency(output.applied_parameters.prc_tail_delivery_fee_usd || 0, "USD")),
+      metric("总物流成本", formatCurrency(output.applied_parameters.prc_total_logistics_usd || quoteMeta.freight_usd || 0, "USD"))
+    ].join("")
+    : [
+      metric("当前报价包", "未使用 PRC 复合报价包"),
+      metric("尾程区域", "未匹配")
+    ].join("");
 
   renderWarnings(output.warnings);
   renderFormulaNotes(output.formula_notes);
@@ -957,6 +1009,7 @@ function runBatchCalculation() {
   state.batchResults = rows;
   saveRecentResults(rows);
   renderTable(batchResultsNode, rows);
+  showToast("success", "测算完成。");
 }
 
 function runCompareCalculation() {
@@ -968,6 +1021,7 @@ function runCompareCalculation() {
   const rows = markComparisonHighlights(buildBatchOutputRows(sourceRows, quoteIds, true));
   state.lastCompareResults = rows;
   renderTable(compareResultsNode, rows);
+  showToast("success", "测算完成。");
 }
 
 function renderBatchPreview() {
@@ -1004,18 +1058,44 @@ function renderAiConfirmPanel() {
   }
 
   const evaluation = evaluateQuoteConfirmation(quoteCard, quoteCard.questions_for_user);
+  const reviewLabel = {
+    ready_to_confirm: "可以确认",
+    needs_business_check: "需要业务确认",
+    needs_logistics_review: "需要物流同事复核",
+    cannot_use: "暂不可用"
+  }[quoteCard.review_level] || quoteCard.review_level;
   aiConfirmPanel.innerHTML = `
     <article class="warning warning-info">
-      <strong>基础信息</strong>
-      <p>${quoteCard.quote_name} | ${quoteCard.forwarder_name} | ${getQuoteModeLabel(quoteCard.mode)} | ${quoteCard.country} | ${quoteCard.billing_method} | ${quoteCard.currency} | ${quoteCard.valid_from || "未填"} ~ ${quoteCard.valid_to || "未填"}</p>
+      <strong>系统识别结果摘要</strong>
+      <p>货代：${quoteCard.forwarder_name}；报价类型：${quoteCard.main_prc_rates.length ? "巴西 PRC 专线复合报价" : getQuoteModeLabel(quoteCard.mode)}；识别到产品代码：${quoteCard.available_product_codes.join(" / ") || "无"}；主运费：${quoteCard.main_prc_rates.map((item) => `${item.product_code}:${item.per_kg_cny} CNY/kg`).join("；") || "未识别"}；处理费重量段：已识别 ${quoteCard.handling_fee_tiers.length} 段；尾程矩阵：已识别 ${quoteCard.tail_delivery_matrix.zones.length} 个区域、${quoteCard.tail_delivery_matrix.entries.length} 条价格；邮编区域表：已识别 ${quoteCard.postal_zone_map.entries.length} 条区间；禁运/限制表：${quoteCard.restriction_notes.length ? "已识别，需业务复核" : "未识别"}。</p>
     </article>
-    <article class="warning warning-info">
-      <strong>关键价格</strong>
-      <p>per_kg_usd=${quoteCard.per_kg_usd || 0}；per_cbm_usd=${quoteCard.per_cbm_usd || 0}；first_weight_kg=${quoteCard.first_weight_kg || 0}；first_weight_fee_usd=${quoteCard.first_weight_fee_usd || 0}；additional_weight_unit_kg=${quoteCard.additional_weight_unit_kg || 0}；additional_weight_fee_usd=${quoteCard.additional_weight_fee_usd || 0}；fixed_per_order_usd=${quoteCard.fixed_per_order_usd || 0}；min_charge_usd=${quoteCard.min_charge_usd || 0}；fuel_surcharge_rate=${quoteCard.fuel_surcharge_rate || 0}；customs_clearance_fee_usd=${quoteCard.customs_clearance_fee_usd || 0}；remote_area_surcharge_usd=${quoteCard.remote_area_surcharge_usd || 0}；sensitive_goods_surcharge_usd=${quoteCard.sensitive_goods_surcharge_usd || 0}；battery_surcharge_usd=${quoteCard.battery_surcharge_usd || 0}</p>
+    <article class="warning ${quoteCard.review_level === "cannot_use" ? "warning-critical" : quoteCard.review_level === "needs_logistics_review" ? "warning-warning" : "warning-ok"}">
+      <strong>确认复杂度</strong>
+      <p>${reviewLabel}</p>
     </article>
     <article class="warning ${quoteCard.confidence_summary.overall === "low" ? "warning-warning" : "warning-info"}">
       <strong>AI 置信度</strong>
       <p>overall=${quoteCard.confidence_summary.overall}；high_confidence_fields=${quoteCard.confidence_summary.high_confidence_fields.join("、") || "无"}；low_confidence_fields=${quoteCard.confidence_summary.low_confidence_fields.join("、") || "无"}；needs_human_check=${quoteCard.confidence_summary.needs_human_check.join("、") || "无"}</p>
+    </article>
+    <article class="warning warning-info">
+      <strong>业务选择</strong>
+      <div class="details-grid">
+        <label><span>产品代码</span><select id="business-product-code">${(quoteCard.available_product_codes.length ? quoteCard.available_product_codes : [""]).map((code) => `<option value="${code}" ${quoteCard.selected_product_code === code ? "selected" : ""}>${code || "其它"}</option>`).join("")}</select></label>
+        <label><span>税费模式</span><select id="business-tax-mode">
+          <option value="system_formula" ${quoteCard.tax_mode === "system_formula" ? "selected" : ""}>使用系统税费公式</option>
+          <option value="forwarder_tax_model" ${quoteCard.tax_mode === "forwarder_tax_model" ? "selected" : ""}>使用货代代缴税模型</option>
+          <option value="manual_tax_input" ${quoteCard.tax_mode === "manual_tax_input" ? "selected" : ""}>手动输入税费</option>
+          <option value="skip_tax" ${quoteCard.tax_mode === "skip_tax" ? "selected" : ""}>暂不计算税费</option>
+        </select></label>
+        <label><span>代缴税手续费 7%</span><select id="business-tax-fee">
+          <option value="true" ${quoteCard.use_forwarder_tax_service_fee ? "selected" : ""}>是</option>
+          <option value="false" ${!quoteCard.use_forwarder_tax_service_fee ? "selected" : ""}>否</option>
+        </select></label>
+        <label><span>尾程区域获取方式</span><select id="business-tail-zone-mode">
+          <option value="cep_lookup" ${quoteCard.tail_zone_mode === "cep_lookup" ? "selected" : ""}>输入 CEP 自动匹配</option>
+          <option value="manual_zone" ${quoteCard.tail_zone_mode === "manual_zone" ? "selected" : ""}>手动选择区域</option>
+        </select></label>
+      </div>
     </article>
     <div class="warning-list">
       ${quoteCard.questions_for_user.map((item, index) => `
@@ -1029,9 +1109,25 @@ function renderAiConfirmPanel() {
         </article>
       `).join("")}
     </div>
+    ${quoteCard.restriction_notes.length ? `
+      <article class="warning warning-warning">
+        <strong>该报价文件包含禁运/限制品类说明</strong>
+        <p>系统检测到禁运表中存在 Device、Sexy、Sexual、Adult product、Battery 等敏感词。你的品类可能需要货代书面确认可承运。</p>
+      </article>
+    ` : ""}
+    <details class="advanced-block advanced-only">
+      <summary>识别详情，高级折叠</summary>
+      <div class="warning-list">
+        <article class="warning warning-info"><strong>main_prc_rates</strong><p>${JSON.stringify(quoteCard.main_prc_rates.slice(0, 10))}</p></article>
+        <article class="warning warning-info"><strong>handling_fee_tiers</strong><p>${JSON.stringify(quoteCard.handling_fee_tiers.slice(0, 10))}</p></article>
+        <article class="warning warning-info"><strong>tail_delivery_matrix</strong><p>${JSON.stringify(quoteCard.tail_delivery_matrix.entries.slice(0, 10))}</p></article>
+        <article class="warning warning-info"><strong>postal_zone_map sample</strong><p>${JSON.stringify(quoteCard.postal_zone_map.entries.slice(0, 10))}</p></article>
+        <article class="warning warning-info"><strong>restriction_notes</strong><p>${JSON.stringify(quoteCard.restriction_notes)}</p></article>
+      </div>
+    </details>
     <article class="warning ${evaluation.can_confirm ? "warning-ok" : "warning-warning"}">
       <strong>确认状态</strong>
-      <p>${evaluation.can_confirm ? "当前已满足确认条件，可以设为 confirmed。" : "当前还不能确认。请先补齐缺失字段、完成必答问题，并确保报价未过期。"}${evaluation.unansweredRequired.length ? ` 未完成问题：${evaluation.unansweredRequired.map((item) => item.question).join("、")}。` : ""}</p>
+      <p>${evaluation.can_confirm ? "当前已满足确认条件，可以设为 confirmed。" : "当前还不能确认。"}${evaluation.blockingIssues.length ? ` 阻止确认的问题：${evaluation.blockingIssues.join("、")}。` : ""}</p>
     </article>
   `;
 }
@@ -1107,6 +1203,12 @@ function refreshAllDataViews() {
   renderBatchPreview();
   renderTable(batchResultsNode, state.batchResults);
   renderTable(compareResultsNode, state.lastCompareResults);
+  const selectedQuote = findQuoteCard(quoteSelect.value);
+  const zones = selectedQuote?.tail_delivery_matrix?.zones || [];
+  document.querySelector("#manual-tail-zone").innerHTML = [
+    '<option value="">自动或未选择</option>',
+    ...zones.map((zone) => `<option value="${zone}">${zone}</option>`)
+  ].join("");
 }
 
 function onSingleSubmit(event) {
@@ -1121,9 +1223,14 @@ function onSingleSubmit(event) {
     state.lastSingleResult = run.result;
     state.lastSingleQuoteMeta = run.quoteMeta;
     renderResult(run.result, run.quoteMeta);
+    if (run.quoteMeta?.matched_postal_zone) {
+      showToast("success", `已匹配区域：${run.quoteMeta.matched_postal_zone.zone}，城市：${run.quoteMeta.matched_postal_zone.city || "-"}，州：${run.quoteMeta.matched_postal_zone.state_code || "-"}.`);
+    }
+    showToast("success", "测算完成。");
   } catch (error) {
     errorNode.hidden = false;
     errorNode.textContent = error.message;
+    showToast("error", `测算失败：${error.message}`);
   }
 }
 
@@ -1204,6 +1311,10 @@ function handleQuoteCardAction(action, quoteId) {
 }
 
 function exportQuoteCardsJson() {
+  if (!state.quoteCards.length) {
+    showToast("error", "当前报价库为空，无法导出。");
+    return;
+  }
   downloadTextFile(
     `quote-library-${getTodayKey()}.json`,
     JSON.stringify({
@@ -1212,6 +1323,7 @@ function exportQuoteCardsJson() {
     }, null, 2),
     "application/json;charset=utf-8"
   );
+  showToast("success", "报价库已导出。");
 }
 
 function importQuoteCardsJson(file) {
@@ -1224,7 +1336,9 @@ function importQuoteCardsJson(file) {
     state.quoteCards = rows.map((item) => normalizeQuoteCard(item));
     saveQuoteCards(state.quoteCards);
     refreshAllDataViews();
+    showToast("success", `已导入 ${state.quoteCards.length} 条报价数据。`);
   }).catch((error) => {
+    showToast("error", "JSON 格式错误或不是有效报价库。");
     window.alert(`导入失败：${error.message}`);
   });
 }
@@ -1233,14 +1347,17 @@ function previewAiImportFromText(text) {
   try {
     state.aiImportDraft = normalizeAiImportPayload(JSON.parse(text));
     renderAiImportPreview();
+    showToast("success", `已生成 ${state.aiImportDraft.quote_cards.length} 个 AI 导入预览。`);
   } catch (error) {
     state.aiImportDraft = null;
     aiImportPreviewNode.innerHTML = `<article class="warning warning-critical"><strong>AI 导入失败</strong><p>${error.message}</p></article>`;
+    showToast("error", "JSON 格式错误或不是有效的 AI 解析结果。");
   }
 }
 
 function saveAiImportedQuotes() {
   if (!state.aiImportDraft?.quote_cards?.length) {
+    showToast("warning", "当前没有可保存的 AI 导入预览。");
     window.alert("当前没有可保存的 AI 导入预览。");
     return;
   }
@@ -1261,11 +1378,13 @@ function saveAiImportedQuotes() {
   state.quoteCards = merged;
   saveQuoteCards(merged);
   refreshAllDataViews();
+  showToast("success", "已保存到报价库。");
 }
 
 function saveRuleExtractedQuotes() {
   const extraction = state.workbookDraft?.ruleExtraction;
   if (!extraction?.quote_cards?.length) {
+    showToast("error", "未识别到可用报价，请尝试手动新增报价卡或使用 Dify 辅助解析。");
     window.alert("当前没有规则识别出的报价卡草稿。");
     return;
   }
@@ -1286,6 +1405,7 @@ function saveRuleExtractedQuotes() {
   state.quoteCards = merged;
   saveQuoteCards(merged);
   refreshAllDataViews();
+  showToast("success", `已生成 ${extraction.quote_cards.length} 个报价草稿，并保存到报价库。`);
 }
 
 function attachEvents() {
@@ -1455,14 +1575,34 @@ function attachEvents() {
     if (!file) {
       return;
     }
+    const stopLoading = setButtonLoading(document.querySelector("#save-rule-drafts"), "正在解析 Excel...");
     try {
       state.workbookDraft = await parseXlsxFile(file);
       state.selectedWorkbookSheets = state.workbookDraft.sheets.map((sheet) => sheet.name);
       refreshAllDataViews();
+      showToast("success", `Excel 已读取，识别到 ${state.workbookDraft.sheets.length} 个 Sheet。`);
+      const extraction = state.workbookDraft.ruleExtraction;
+      const hasPrc = extraction?.quote_cards?.some((item) => item.main_prc_rates?.length);
+      if (hasPrc) {
+        const hasTail = extraction.quote_cards.some((item) => item.tail_delivery_matrix?.entries?.length);
+        const hasPostal = extraction.quote_cards.some((item) => item.postal_zone_map?.entries?.length);
+        if (hasTail && hasPostal) {
+          showToast("success", "已识别 PRC 主报价、尾程矩阵和邮编区域表，已生成报价包草稿。");
+        } else {
+          showToast("warning", "已识别 PRC 主报价，但尾程矩阵或邮编区域表缺失，请复核。");
+        }
+      } else if (extraction?.quote_cards?.length) {
+        showToast("success", `已生成 ${extraction.quote_cards.length} 个报价草稿。`);
+      } else {
+        showToast("warning", "未识别到可用报价，请尝试手动新增报价卡或使用 Dify 辅助解析。");
+      }
     } catch (error) {
       state.workbookDraft = null;
       state.selectedWorkbookSheets = [];
       excelPreprocessSummaryNode.innerHTML = `<article class="warning warning-critical"><strong>Excel 预处理失败</strong><p>${error.message}</p></article>`;
+      showToast("error", "Excel 解析失败，请确认文件格式为 .xlsx。");
+    } finally {
+      stopLoading();
     }
   });
 
@@ -1482,10 +1622,12 @@ function attachEvents() {
 
   document.querySelector("#copy-ai-readable-text").addEventListener("click", async () => {
     if (!excelAiReadableTextInput.value) {
+      showToast("error", "未生成文本，请先选择 Sheet。");
       window.alert("当前还没有 AI 可读文本。");
       return;
     }
     await navigator.clipboard.writeText(excelAiReadableTextInput.value);
+    showToast("success", "已生成 AI 可读文本，可复制给 Dify 或其他 AI 工具。");
   });
 
   document.querySelector("#download-ai-readable-text").addEventListener("click", () => {
@@ -1494,6 +1636,7 @@ function attachEvents() {
       excelAiReadableTextInput.value || "",
       "text/plain;charset=utf-8"
     );
+    showToast("success", "已生成 AI 可读文本，可复制给 Dify 或其他 AI 工具。");
   });
 
   document.querySelector("#save-rule-drafts").addEventListener("click", saveRuleExtractedQuotes);
@@ -1506,6 +1649,10 @@ function attachEvents() {
     }
     const nextQuote = normalizeQuoteCard({
       ...quoteCard,
+      selected_product_code: document.querySelector("#business-product-code")?.value || quoteCard.selected_product_code,
+      tax_mode: document.querySelector("#business-tax-mode")?.value || quoteCard.tax_mode,
+      use_forwarder_tax_service_fee: document.querySelector("#business-tax-fee")?.value === "true",
+      tail_zone_mode: document.querySelector("#business-tail-zone-mode")?.value || quoteCard.tail_zone_mode,
       questions_for_user: answersFromAiConfirmPanel(quoteCard)
     });
     state.quoteCards = state.quoteCards.map((item) => item.quote_id === nextQuote.quote_id ? nextQuote : item);
@@ -1516,6 +1663,7 @@ function attachEvents() {
   document.querySelector("#confirm-ai-quote").addEventListener("click", () => {
     const quoteCard = findQuoteCard(aiConfirmSelect.value);
     if (!quoteCard) {
+      showToast("error", "请先选择一张 AI 或规则识别报价卡。");
       window.alert("请先选择一张 AI 解析报价卡。");
       return;
     }
@@ -1530,6 +1678,7 @@ function attachEvents() {
       state.quoteCards = state.quoteCards.map((item) => item.quote_id === kept.quote_id ? kept : item);
       saveQuoteCards(state.quoteCards);
       refreshAllDataViews();
+      showToast("error", `还有 ${evaluation.blockingIssues.length} 个必填业务问题未确认，暂不能设为 confirmed。`);
       window.alert("确认未通过，报价卡已保持在待确认状态。");
       return;
     }
@@ -1540,6 +1689,7 @@ function attachEvents() {
     state.quoteCards = state.quoteCards.map((item) => item.quote_id === confirmed.quote_id ? confirmed : item);
     saveQuoteCards(state.quoteCards);
     refreshAllDataViews();
+    showToast("success", "报价已确认并保存到报价库，可用于测算。");
     window.alert("报价卡已确认，现在可以正式参与测算。");
   });
 
