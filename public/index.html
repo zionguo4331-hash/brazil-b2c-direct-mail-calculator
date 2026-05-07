@@ -508,7 +508,7 @@
               <div class="button-row">
                 <button type="button" class="ghost-button" id="copy-ai-readable-text">复制 AI 可读文本</button>
                 <button type="button" class="ghost-button" id="download-ai-readable-text">下载 AI 可读文本 .txt</button>
-                <button type="button" class="ghost-button" id="save-rule-drafts">保存规则识别草稿到报价库</button>
+                <button type="button" class="ghost-button" id="save-rule-drafts">保存草稿并进入报价确认</button>
               </div>
               <p class="summary-text">可选：复制给 Dify 报价解析助手。如果本地规则识别结果已经足够清楚，可以直接编辑并确认报价卡，不需要使用 Dify。</p>
               <div id="excel-rule-preview" class="warning-list"></div>
@@ -520,13 +520,13 @@
           </article>
 
           <article class="panel result-card">
-            <h2>AI 报价卡确认</h2>
-            <p class="summary-text">对 AI 解析的报价卡，请先确认关键价格、有效期和业务问题。只有确认完成后，才能正式参与定价。</p>
+            <h2>报价确认</h2>
+            <p class="summary-text">系统会先自动识别价格、重量段和区域规则。你只需要确认少量业务问题；规则识别和 AI 识别生成的草稿都要先在这里确认，才能正式参与定价。</p>
             <div class="stack">
               <label>
                 <span>选择待确认报价卡</span>
                 <select id="ai-confirm-quote-select">
-                  <option value="">请选择一张 AI 解析报价卡</option>
+                  <option value="">请选择一张待确认报价卡</option>
                 </select>
               </label>
               <label>

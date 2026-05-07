@@ -221,6 +221,14 @@ function deriveReviewLevel(quoteCard, validation) {
   return "ready_to_confirm";
 }
 
+function isExtractedQuote(quoteCard) {
+  return ["ai_extracted", "rule_extracted", "csv_imported", "json_imported"].includes(quoteCard.source);
+}
+
+function isPrcCompositeQuote(quoteCard) {
+  return (quoteCard.main_prc_rates?.length || 0) > 0;
+}
+
 function modeToFulfillmentMode(mode) {
   if (mode === "air_direct_mail") {
     return "china_direct_mail_air";
@@ -289,6 +297,9 @@ function validateRequiredFields(quoteCard) {
   if (quoteCard.mode === "air_direct_mail") {
     if (!toNumber(quoteCard.volumetric_divisor)) {
       missingFields.push("volumetric_divisor");
+    }
+    if (isPrcCompositeQuote(quoteCard)) {
+      return missingFields;
     }
     const hasPerKg = toNumber(quoteCard.per_kg_usd) > 0;
     const hasFirstAdditional =
@@ -359,13 +370,16 @@ export function validateQuoteCard(rawQuoteCard) {
     risk_fields.push("low_confidence");
   }
 
+  const extracted = isExtractedQuote(quoteCard);
+
   return {
     missing_fields,
     risk_fields,
     is_expired,
     can_confirm: missing_fields.length === 0 && !is_expired,
     can_formally_participate: missing_fields.length === 0 && suggested_status === "confirmed",
-    suggested_status
+    suggested_status,
+    extracted
   };
 }
 
@@ -395,7 +409,7 @@ export function normalizeQuoteCard(rawQuoteCard) {
   quoteCard.confidence_summary = normalizeConfidenceSummary(quoteCard.confidence_summary);
   quoteCard.questions_for_user = normalizeQuestionsForUser(
     quoteCard.questions_for_user,
-    quoteCard.source === "ai_extracted"
+    ["ai_extracted", "rule_extracted"].includes(quoteCard.source)
   );
   quoteCard.created_at = quoteCard.created_at || now;
   quoteCard.updated_at = now;
@@ -434,6 +448,9 @@ export function normalizeQuoteCard(rawQuoteCard) {
 }
 
 export function buildQuoteCardSummary(quoteCard) {
+  if (isPrcCompositeQuote(quoteCard)) {
+    return quoteCard.main_prc_rates.map((item) => `${item.product_code}:${item.per_kg_cny} CNY/kg`).join("；") || "PRC 复合报价";
+  }
   if (quoteCard.billing_method === "per_kg") {
     return `${quoteCard.base_fee_usd || 0} + ${quoteCard.per_kg_usd || 0}/kg`;
   }
@@ -509,11 +526,14 @@ export function normalizeAiImportPayload(rawPayload) {
 export function evaluateQuoteConfirmation(quoteCard, answers) {
   const normalized = normalizeQuoteCard({
     ...quoteCard,
-    questions_for_user: normalizeQuestionsForUser(answers || quoteCard.questions_for_user, quoteCard.source === "ai_extracted")
+    questions_for_user: normalizeQuestionsForUser(
+      answers || quoteCard.questions_for_user,
+      ["ai_extracted", "rule_extracted"].includes(quoteCard.source)
+    )
   });
   const unansweredRequired = normalized.questions_for_user.filter((item) => item.required && !["yes", "no"].includes(item.answer));
   const blockingIssues = [];
-  if (!normalized.selected_product_code && normalized.available_product_codes.length > 0) {
+  if (!normalized.selected_product_code && normalized.available_product_codes.length > 1) {
     blockingIssues.push("请选择产品代码");
   }
   if (!normalized.tax_mode) {
@@ -525,8 +545,14 @@ export function evaluateQuoteConfirmation(quoteCard, answers) {
   if (normalized.tail_zone_mode === "cep_lookup" && normalized.tail_delivery_matrix.entries.length === 0) {
     blockingIssues.push("缺少尾程矩阵，无法使用 CEP 模式");
   }
+  if (normalized.tail_zone_mode === "cep_lookup" && normalized.postal_zone_map.entries.length === 0) {
+    blockingIssues.push("缺少邮编区域表，无法使用 CEP 模式");
+  }
   if (unansweredRequired.length > 0) {
     blockingIssues.push("存在必填业务问题未完成");
+  }
+  if (normalized.review_level === "cannot_use") {
+    blockingIssues.push("当前报价结构暂不可用");
   }
 
   return {
@@ -558,6 +584,23 @@ export function confirmQuoteCard(quoteCard, { confirmedBy = "local_user", answer
     confirmed_at: nowIsoString(),
     confirmed_by: confirmedBy || "local_user"
   });
+}
+
+export function getQuoteReviewSummary(quoteCard) {
+  const evaluation = evaluateQuoteConfirmation(quoteCard, quoteCard.questions_for_user);
+  const reviewLabel = {
+    ready_to_confirm: "可以确认",
+    needs_business_check: "需要业务确认",
+    needs_logistics_review: "需要物流同事复核",
+    cannot_use: "暂不可用"
+  }[quoteCard.review_level] || quoteCard.review_level;
+
+  return {
+    review_label: reviewLabel,
+    blocking_issues: evaluation.blockingIssues,
+    review_count: evaluation.unansweredRequired.length,
+    is_extracted: isExtractedQuote(quoteCard)
+  };
 }
 
 export function calculateFreightFromQuoteCard(sku, rawQuoteCard, options = {}) {
