@@ -17,11 +17,15 @@ function safeRead(key, fallback) {
 function safeWrite(key, value) {
   try {
     const raw = JSON.stringify(value);
+    const sizeKb = Math.round(raw.length / 1024);
+    if (sizeKb > 4500) {
+      return { ok: false, error: `数据过大（约 ${sizeKb}KB）。系统已裁剪多余字段压缩数据，请重试保存。` };
+    }
     localStorage.setItem(key, raw);
     return { ok: true };
   } catch (error) {
     console.warn("storage write failed", key, error.message);
-    return { ok: false, error: error.message };
+    return { ok: false, error: `保存失败：浏览器存储空间不足。请先到"数据导入导出"页清空旧数据后再试。` };
   }
 }
 

@@ -430,6 +430,24 @@ export function normalizeQuoteCard(rawQuoteCard) {
   };
   quoteCard.restriction_notes = Array.isArray(quoteCard.restriction_notes) ? quoteCard.restriction_notes : [];
 
+  if (quoteCard.postal_zone_map.entries.length > 10 || quoteCard.tail_delivery_matrix.entries.length > 50) {
+    quoteCard.postal_zone_map.entries = quoteCard.postal_zone_map.entries.map((entry) => ({
+      postcode_start: entry.postcode_start,
+      postcode_end: entry.postcode_end,
+      zone: entry.zone,
+      state_code: entry.state_code || ""
+    }));
+    quoteCard.tail_delivery_matrix.entries = quoteCard.tail_delivery_matrix.entries.map((entry) => ({
+      zone: entry.zone,
+      fee_cny: entry.fee_cny,
+      weight_0_100: entry.weight_0_100,
+      weight_100_200: entry.weight_100_200,
+      weight_200_300: entry.weight_200_300,
+      weight_300_500: entry.weight_300_500,
+      weight_500_1000: entry.weight_500_1000
+    }));
+  }
+
   const validation = validateQuoteCard(quoteCard);
   if (
     ["ai_extracted", "rule_extracted"].includes(quoteCard.source) &&
