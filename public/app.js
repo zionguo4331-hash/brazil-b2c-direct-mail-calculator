@@ -1420,35 +1420,44 @@ function saveAiImportedQuotes() {
     return;
   }
   const stopLoading = setButtonLoading(document.querySelector("#save-ai-imported-quotes"), "正在保存...");
-  const merged = [...state.quoteCards];
-  for (const quoteCard of state.aiImportDraft.quote_cards) {
-    const normalized = normalizeQuoteCard({
-      ...quoteCard,
-      source: "ai_extracted",
-      status: "needs_review"
-    });
-    const index = merged.findIndex((item) => item.quote_id === normalized.quote_id);
-    if (index >= 0) {
-      merged[index] = normalized;
-    } else {
-      merged.unshift(normalized);
+  try {
+    const merged = [...state.quoteCards];
+    for (const quoteCard of state.aiImportDraft.quote_cards) {
+      const normalized = normalizeQuoteCard({
+        ...quoteCard,
+        source: "ai_extracted",
+        status: "needs_review"
+      });
+      const index = merged.findIndex((item) => item.quote_id === normalized.quote_id);
+      if (index >= 0) {
+        merged[index] = normalized;
+      } else {
+        merged.unshift(normalized);
+      }
     }
+    state.quoteCards = merged;
+    const saveResult = saveQuoteCards(merged);
+    if (!saveResult.ok) {
+      showToast("error", `保存失败：${saveResult.error || "本地存储空间不足或数据过大"}。请尝试减少数据量或清空旧数据。`);
+      return;
+    }
+    refreshAllDataViews();
+    if (state.aiImportDraft.quote_cards[0]?.quote_id) {
+      aiConfirmSelect.value = state.aiImportDraft.quote_cards[0].quote_id;
+      renderAiConfirmPanel();
+      showToast("success", "草稿已保存。已自动选中第一张，下面请确认业务问题后再正式使用。");
+    } else {
+      showToast("success", "已保存到报价库。");
+    }
+    const confirmPanel = document.querySelector("#ai-confirm-panel");
+    if (confirmPanel) {
+      confirmPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  } catch (error) {
+    showToast("error", `保存失败：${error.message || "未知错误"}`);
+  } finally {
+    stopLoading();
   }
-  state.quoteCards = merged;
-  saveQuoteCards(merged);
-  refreshAllDataViews();
-  if (state.aiImportDraft.quote_cards[0]?.quote_id) {
-    aiConfirmSelect.value = state.aiImportDraft.quote_cards[0].quote_id;
-    renderAiConfirmPanel();
-    showToast("success", "草稿已保存。已自动选中第一张，下面请确认业务问题后再正式使用。");
-  } else {
-    showToast("success", "已保存到报价库。");
-  }
-  const confirmPanel = document.querySelector("#ai-confirm-panel");
-  if (confirmPanel) {
-    confirmPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  stopLoading();
 }
 
 function saveRuleExtractedQuotes() {
@@ -1458,38 +1467,47 @@ function saveRuleExtractedQuotes() {
     return;
   }
   const stopLoading = setButtonLoading(document.querySelector("#save-rule-drafts"), "正在保存...");
-  const merged = [...state.quoteCards];
-  for (const quoteCard of extraction.quote_cards) {
-    const normalized = normalizeQuoteCard({
-      ...quoteCard,
-      source: "rule_extracted",
-      status: "needs_review"
-    });
-    const index = merged.findIndex((item) => item.quote_id === normalized.quote_id);
-    if (index >= 0) {
-      merged[index] = normalized;
-    } else {
-      merged.unshift(normalized);
+  try {
+    const merged = [...state.quoteCards];
+    for (const quoteCard of extraction.quote_cards) {
+      const normalized = normalizeQuoteCard({
+        ...quoteCard,
+        source: "rule_extracted",
+        status: "needs_review"
+      });
+      const index = merged.findIndex((item) => item.quote_id === normalized.quote_id);
+      if (index >= 0) {
+        merged[index] = normalized;
+      } else {
+        merged.unshift(normalized);
+      }
     }
-  }
-  state.quoteCards = merged;
-  saveQuoteCards(merged);
-  refreshAllDataViews();
+    state.quoteCards = merged;
+    const saveResult = saveQuoteCards(merged);
+    if (!saveResult.ok) {
+      showToast("error", `保存失败：${saveResult.error || "本地存储空间不足或数据过大"}。请尝试减少数据量或清空旧数据。`);
+      return;
+    }
+    refreshAllDataViews();
 
-  const firstRuleQuote = merged.find((item) => item.source === "rule_extracted");
-  if (firstRuleQuote) {
-    aiConfirmSelect.value = firstRuleQuote.quote_id;
-    renderAiConfirmPanel();
-    showToast("success", `草稿已保存（${extraction.quote_cards.length} 张）。已自动选中第一张，下面请确认业务问题后再正式使用。`);
-  } else {
-    showToast("success", `已保存 ${extraction.quote_cards.length} 个报价草稿到报价库。`);
-  }
+    const firstRuleQuote = merged.find((item) => item.source === "rule_extracted");
+    if (firstRuleQuote) {
+      aiConfirmSelect.value = firstRuleQuote.quote_id;
+      renderAiConfirmPanel();
+      showToast("success", `草稿已保存（${extraction.quote_cards.length} 张）。已自动选中第一张，下面请确认业务问题后再正式使用。`);
+    } else {
+      showToast("success", `已保存 ${extraction.quote_cards.length} 个报价草稿到报价库。`);
+    }
 
-  const confirmPanel = document.querySelector("#ai-confirm-panel");
-  if (confirmPanel) {
-    confirmPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    const confirmPanel = document.querySelector("#ai-confirm-panel");
+    if (confirmPanel) {
+      confirmPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  } catch (error) {
+    showToast("error", `保存失败：${error.message || "未知错误"}`);
+  } finally {
+    stopLoading();
   }
-  stopLoading();
 }
 
 function attachEvents() {
@@ -1754,30 +1772,42 @@ function attachEvents() {
       return;
     }
     const stopLoading = setButtonLoading(document.querySelector("#confirm-ai-quote"), "正在确认...");
-    const answers = answersFromAiConfirmPanel(quoteCard);
-    const evaluation = evaluateQuoteConfirmation(quoteCard, answers);
-    if (!evaluation.can_confirm) {
-      const kept = normalizeQuoteCard({
-        ...evaluation.quoteCard,
-        questions_for_user: answers,
-        status: evaluation.quoteCard.status === "expired" ? "expired" : "needs_review"
+    try {
+      const answers = answersFromAiConfirmPanel(quoteCard);
+      const evaluation = evaluateQuoteConfirmation(quoteCard, answers);
+      if (!evaluation.can_confirm) {
+        const kept = normalizeQuoteCard({
+          ...evaluation.quoteCard,
+          questions_for_user: answers,
+          status: evaluation.quoteCard.status === "expired" ? "expired" : "needs_review"
+        });
+        state.quoteCards = state.quoteCards.map((item) => item.quote_id === kept.quote_id ? kept : item);
+        const saveResult = saveQuoteCards(state.quoteCards);
+        if (!saveResult.ok) {
+          showToast("error", "保存失败，请重试。");
+          return;
+        }
+        refreshAllDataViews();
+        showToast("error", `还有 ${evaluation.blockingIssues.length} 个必填业务问题未完成，报价卡暂保持在待确认状态。`);
+        return;
+      }
+      const confirmed = confirmQuoteCard(quoteCard, {
+        confirmedBy: aiConfirmedByInput.value || "local_user",
+        answers
       });
-      state.quoteCards = state.quoteCards.map((item) => item.quote_id === kept.quote_id ? kept : item);
-      saveQuoteCards(state.quoteCards);
+      state.quoteCards = state.quoteCards.map((item) => item.quote_id === confirmed.quote_id ? confirmed : item);
+      const saveResult = saveQuoteCards(state.quoteCards);
+      if (!saveResult.ok) {
+        showToast("error", "保存失败，请重试。");
+        return;
+      }
       refreshAllDataViews();
-      showToast("error", `还有 ${evaluation.blockingIssues.length} 个必填业务问题未完成，报价卡暂保持在待确认状态。`);
+      showToast("success", "报价已确认并保存到报价库，可用于测算。");
+    } catch (error) {
+      showToast("error", `确认失败：${error.message || "未知错误"}`);
+    } finally {
       stopLoading();
-      return;
     }
-    const confirmed = confirmQuoteCard(quoteCard, {
-      confirmedBy: aiConfirmedByInput.value || "local_user",
-      answers
-    });
-    state.quoteCards = state.quoteCards.map((item) => item.quote_id === confirmed.quote_id ? confirmed : item);
-    saveQuoteCards(state.quoteCards);
-    refreshAllDataViews();
-    showToast("success", "报价已确认并保存到报价库，可用于测算。");
-    stopLoading();
   });
 
   document.querySelector("#clear-local-data").addEventListener("click", () => {

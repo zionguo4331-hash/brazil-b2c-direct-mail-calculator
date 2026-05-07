@@ -15,7 +15,22 @@ function safeRead(key, fallback) {
 }
 
 function safeWrite(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  try {
+    const raw = JSON.stringify(value);
+    localStorage.setItem(key, raw);
+    return { ok: true };
+  } catch (error) {
+    console.warn("storage write failed", key, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+function safeRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
 }
 
 export function loadQuoteCards() {
@@ -23,7 +38,7 @@ export function loadQuoteCards() {
 }
 
 export function saveQuoteCards(quoteCards) {
-  safeWrite(STORAGE_KEYS.quoteCards, quoteCards);
+  return safeWrite(STORAGE_KEYS.quoteCards, quoteCards);
 }
 
 export function loadUserDefaults() {
@@ -52,6 +67,6 @@ export function saveRecentResults(rows) {
 
 export function clearAllLocalData() {
   for (const key of Object.values(STORAGE_KEYS)) {
-    localStorage.removeItem(key);
+    safeRemove(key);
   }
 }
