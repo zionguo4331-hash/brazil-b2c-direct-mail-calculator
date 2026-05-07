@@ -1671,23 +1671,18 @@ function attachEvents() {
         const hasTail = extraction.quote_cards.some((item) => item.tail_delivery_matrix?.entries?.length);
         const hasPostal = extraction.quote_cards.some((item) => item.postal_zone_map?.entries?.length);
         if (hasTail && hasPostal) {
-          showToast("success", "已识别 PRC 主报价、尾程矩阵和邮编区域表。下一步请点击"保存草稿并进入报价确认"。");
+          showToast("success", "已识别 PRC 主报价、尾程矩阵和邮编区域表。下一步请点击【保存草稿并进入报价确认】。");
         } else {
           showToast("warning", "已识别 PRC 主报价，但尾程矩阵或邮编区域表缺失。你仍可先保存草稿，再由业务或物流同事复核。");
         }
       } else if (extraction?.quote_cards?.length) {
-        showToast("success", `已生成 ${extraction.quote_cards.length} 个报价草稿。下一步请点击"保存草稿并进入报价确认"。`);
+        showToast("success", `已生成 ${extraction.quote_cards.length} 个报价草稿。下一步请点击【保存草稿并进入报价确认】。`);
       } else {
         showToast("warning", "未识别到可用报价，请尝试手动新增报价卡或使用 Dify 辅助解析。");
       }
       showToast("success", `Excel 已读取，识别到 ${state.workbookDraft.sheets.length} 个 Sheet。`);
       if (extraction?.quote_cards?.length) {
         document.querySelector("#excel-rule-preview").scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-      } else if (extraction?.quote_cards?.length) {
-        showToast("success", `已生成 ${extraction.quote_cards.length} 个报价草稿。下一步请点击“保存草稿并进入报价确认”。`);
-      } else {
-        showToast("warning", "未识别到可用报价，请尝试手动新增报价卡或使用 Dify 辅助解析。");
       }
     } catch (error) {
       state.workbookDraft = null;
