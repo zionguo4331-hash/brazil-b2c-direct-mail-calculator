@@ -54,38 +54,60 @@ function buildWorkbookData() {
         rows: [
           {
             rowNumber: 3,
-            text: "D=SP-CAP | E=SP-INT1 | F=SP-INT2",
+            text: "D=SP-CAP | E=SP-INT1 | F=SP-INT2 | G=RJ-CAP",
             cells: [
               { columnName: "D", value: "SP-CAP" },
               { columnName: "E", value: "SP-INT1" },
-              { columnName: "F", value: "SP-INT2" }
+              { columnName: "F", value: "SP-INT2" },
+              { columnName: "G", value: "RJ-CAP" }
+            ]
+          },
+          {
+            rowNumber: 4,
+            text: "B=0 | C=0.25 | G=23.56",
+            cells: [
+              { columnName: "B", value: "0" },
+              { columnName: "C", value: "0.25" },
+              { columnName: "G", value: "23.56" }
             ]
           },
           {
             rowNumber: 5,
-            text: "B=0.251 | C=0.5 | F=32.81",
+            text: "B=0.251 | C=0.5 | F=32.81 | G=25.8",
             cells: [
               { columnName: "B", value: "0.251" },
               { columnName: "C", value: "0.5" },
-              { columnName: "F", value: "32.81" }
+              { columnName: "F", value: "32.81" },
+              { columnName: "G", value: "25.8" }
             ]
           },
           {
             rowNumber: 6,
-            text: "B=0.501 | C=0.75 | F=36.56",
+            text: "B=0.501 | C=0.75 | F=36.56 | G=28.41",
             cells: [
               { columnName: "B", value: "0.501" },
               { columnName: "C", value: "0.75" },
-              { columnName: "F", value: "36.56" }
+              { columnName: "F", value: "36.56" },
+              { columnName: "G", value: "28.41" }
             ]
           },
           {
             rowNumber: 7,
-            text: "B=0.751 | C=1 | F=40",
+            text: "B=0.751 | C=1 | F=40 | G=31.24",
             cells: [
               { columnName: "B", value: "0.751" },
               { columnName: "C", value: "1" },
-              { columnName: "F", value: "40" }
+              { columnName: "F", value: "40" },
+              { columnName: "G", value: "31.24" }
+            ]
+          },
+          {
+            rowNumber: 8,
+            text: "B=1.001 | C=2 | G=43.67",
+            cells: [
+              { columnName: "B", value: "1.001" },
+              { columnName: "C", value: "2" },
+              { columnName: "G", value: "43.67" }
             ]
           }
         ]
@@ -118,7 +140,7 @@ test("PRC workbook support sheets do not become standalone selectable quote card
   assert.equal(extraction.quote_cards.length, 1);
   const packageCard = extraction.quote_cards[0];
   assert.equal(packageCard.main_prc_rates.length, 2);
-  assert.equal(packageCard.tail_delivery_matrix.entries.length, 3);
+  assert.equal(packageCard.tail_delivery_matrix.entries.length, 8);
   assert.equal(packageCard.postal_zone_map.entries.length, 1);
   assert.equal(packageCard.handling_fee_tiers.length, 3);
   assert.equal(packageCard.handling_fee_tiers[0].fee_cny, 28.82);
@@ -153,4 +175,62 @@ test("PRC package can resolve BR1001 + 01254-999 to SP-INT2 and 0.50kg", () => {
   assert.equal(freight.prc_components?.main_freight_cny, 40);
   assert.equal(freight.prc_components?.handling_fee_cny, 28.82);
   assert.equal(freight.matched_tail_delivery_entry?.fee_cny, 32.81);
+});
+
+test("PRC package prefers BR code from SKU/product name when explicit selected_product_code is absent", () => {
+  const extraction = ruleBasedQuoteExtractor(buildWorkbookData(), { cny_to_usd: 0.1468, brl_to_usd: 0.2037 });
+  const quoteCard = normalizeQuoteCard({
+    ...extraction.quote_cards[0],
+    status: "confirmed"
+  });
+
+  const freight = calculateFreightFromQuoteCard(
+    {
+      sku: "BR1002",
+      product_name: "BR1002",
+      actual_weight_kg: 0.4,
+      length_cm: 20,
+      width_cm: 15,
+      height_cm: 10,
+      cny_to_usd: 0.1468,
+      destination_cep: "01254-999"
+    },
+    quoteCard,
+    {}
+  );
+
+  assert.equal(freight.prc_components?.product_code, "BR1002");
+  assert.equal(freight.prc_components?.main_freight_cny, 41);
+});
+
+test("PRC package keeps tail weight bands and resolves RJ-CAP 1.01kg to 43.67", () => {
+  const extraction = ruleBasedQuoteExtractor(buildWorkbookData(), { cny_to_usd: 0.1468, brl_to_usd: 0.2037 });
+  const quoteCard = normalizeQuoteCard({
+    ...extraction.quote_cards[0],
+    status: "confirmed",
+    selected_product_code: "BR1002",
+    postal_zone_map: {
+      entries: [
+        { postcode_start: 20020000, postcode_end: 20020999, zone: "RJ-CAP", state_code: "RJ" }
+      ]
+    }
+  });
+
+  const freight = calculateFreightFromQuoteCard(
+    {
+      sku: "BR1002",
+      product_name: "BR1002",
+      actual_weight_kg: 1.01,
+      length_cm: 20,
+      width_cm: 15,
+      height_cm: 10,
+      cny_to_usd: 0.1468,
+      destination_cep: "20020-000"
+    },
+    quoteCard,
+    {}
+  );
+
+  assert.equal(freight.matched_postal_zone?.zone, "RJ-CAP");
+  assert.equal(freight.matched_tail_delivery_entry?.fee_cny, 43.67);
 });

@@ -217,6 +217,30 @@ function normalizeQuestionsForUser(rawQuestions, useDefaults = false) {
   }));
 }
 
+function inferSelectedProductCode(payload = {}, quoteCard = {}) {
+  const availableCodes = Array.isArray(quoteCard.available_product_codes) ? quoteCard.available_product_codes : [];
+  const candidates = [
+    payload.selected_product_code,
+    payload.sku,
+    payload.product_name,
+    quoteCard.selected_product_code
+  ]
+    .map((item) => String(item || "").trim().toUpperCase())
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    const matched = candidate.match(/BR\d{4}/);
+    if (!matched) {
+      continue;
+    }
+    if (!availableCodes.length || availableCodes.includes(matched[0])) {
+      return matched[0];
+    }
+  }
+
+  return availableCodes[0] || "";
+}
+
 function deriveReviewLevel(quoteCard, validation) {
   const hasMainRate = (quoteCard.main_prc_rates?.length || 0) > 0 || quoteCard.per_kg_usd > 0 || quoteCard.per_cbm_usd > 0 || quoteCard.fixed_per_order_usd > 0;
   const hasTailMatrix = (quoteCard.tail_delivery_matrix?.entries?.length || 0) > 0 || quoteCard.last_mile_delivery_usd > 0;
@@ -318,6 +342,16 @@ function findTailDeliveryEntry(quoteCard, zone, weightKg) {
     const maxWeight = Number(item.max_weight_kg || Number.MAX_SAFE_INTEGER);
     return item.zone === zone && weightKg >= minWeight && weightKg <= maxWeight;
   }) || null;
+}
+
+function hasBrokenTailWeightBands(quoteCard) {
+  return Array.isArray(quoteCard.tail_delivery_matrix?.entries)
+    && quoteCard.tail_delivery_matrix.entries.some((entry) =>
+      entry
+      && entry.zone
+      && entry.fee_cny !== undefined
+      && (entry.min_weight_kg === undefined || entry.max_weight_kg === undefined)
+    );
 }
 
 export function getQuoteModeLabel(mode) {
@@ -585,21 +619,12 @@ export function normalizeQuoteCard(rawQuoteCard) {
   };
   quoteCard.restriction_notes = Array.isArray(quoteCard.restriction_notes) ? quoteCard.restriction_notes : [];
 
-  if (quoteCard.postal_zone_map.entries.length > 10 || quoteCard.tail_delivery_matrix.entries.length > 50) {
+  if (quoteCard.postal_zone_map.entries.length > 10) {
     quoteCard.postal_zone_map.entries = quoteCard.postal_zone_map.entries.map((entry) => ({
       postcode_start: entry.postcode_start,
       postcode_end: entry.postcode_end,
       zone: entry.zone,
       state_code: entry.state_code || ""
-    }));
-    quoteCard.tail_delivery_matrix.entries = quoteCard.tail_delivery_matrix.entries.map((entry) => ({
-      zone: entry.zone,
-      fee_cny: entry.fee_cny,
-      weight_0_100: entry.weight_0_100,
-      weight_100_200: entry.weight_100_200,
-      weight_200_300: entry.weight_200_300,
-      weight_300_500: entry.weight_300_500,
-      weight_500_1000: entry.weight_500_1000
     }));
   }
 
@@ -802,6 +827,13 @@ export function calculateFreightFromQuoteCard(sku, rawQuoteCard, options = {}) {
       message: `报价卡缺少关键字段：${quoteCard.validation.missing_fields.join("、")}。`
     });
   }
+  if (hasBrokenTailWeightBands(quoteCard)) {
+    warnings.push({
+      code: "QUOTE_TAIL_MATRIX_NEEDS_REIMPORT",
+      severity: "warning",
+      message: "这张报价卡的尾程重量档已损坏，需重新上传 Excel 并重新生成报价卡。"
+    });
+  }
 
   let freight_usd = 0;
   let freight_method = `${quoteCard.mode}:${quoteCard.billing_method}`;
@@ -810,7 +842,7 @@ export function calculateFreightFromQuoteCard(sku, rawQuoteCard, options = {}) {
   let prc_components = null;
 
   if (quoteCard.main_prc_rates.length > 0) {
-    const selectedProductCode = sku.selected_product_code || quoteCard.selected_product_code || quoteCard.available_product_codes[0] || "";
+    const selectedProductCode = inferSelectedProductCode(sku, quoteCard);
     const mainRate = findPrCMainRate(quoteCard, selectedProductCode);
     const handlingTier = findHandlingTier(quoteCard, chargeable_weight_kg);
     const tailZoneMode = sku.tail_zone_mode || quoteCard.tail_zone_mode || "cep_lookup";
@@ -953,11 +985,7 @@ export function calculateFreightFromQuoteCard(sku, rawQuoteCard, options = {}) {
 
 export function applyQuoteCardToPayload(basePayload, quoteCard, freightResult) {
   const normalizedQuoteCard = normalizeQuoteCard(quoteCard);
-  const resolvedProductCode =
-    basePayload.selected_product_code ||
-    normalizedQuoteCard.selected_product_code ||
-    normalizedQuoteCard.available_product_codes?.[0] ||
-    "";
+  const resolvedProductCode = inferSelectedProductCode(basePayload, normalizedQuoteCard);
   const nextPayload = {
     ...basePayload,
     fulfillment_mode: modeToFulfillmentMode(normalizedQuoteCard.mode),
