@@ -492,6 +492,24 @@ th {
   margin: 0;
 }
 
+.result-toolbar {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.result-toolbar-card h2 {
+  font-size: 1.15rem;
+}
+
+.result-currency-button.is-active {
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, #ea580c 100%);
+  border-color: transparent;
+}
+
 @media (max-width: 960px) {
   .layout,
   .info-grid {
@@ -502,5 +520,9 @@ th {
   .quote-form,
   .details-grid {
     grid-template-columns: 1fr;
+  }
+
+  .result-toolbar {
+    align-items: flex-start;
   }
 }

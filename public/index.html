@@ -22,34 +22,41 @@
       </section>
 
       <nav class="tab-nav panel" aria-label="主模块">
-        <button type="button" class="tab-button is-active" data-tab-target="guide-tab">首页 / 使用指引</button>
-        <button type="button" class="tab-button" data-tab-target="single-tab">单 SKU 测算</button>
+        <button type="button" class="tab-button is-active" data-tab-target="guide-tab">首页</button>
+        <button type="button" class="tab-button" data-tab-target="single-tab">单个产品测算</button>
         <button type="button" class="tab-button" data-tab-target="batch-tab">批量 SKU 测算</button>
-        <button type="button" class="tab-button" data-tab-target="quotes-tab">报价卡管理</button>
-        <button type="button" class="tab-button" data-tab-target="compare-tab">多报价对比</button>
+        <button type="button" class="tab-button" data-tab-target="quotes-tab">新增 / 维护物流报价</button>
+        <button type="button" class="tab-button" data-tab-target="compare-tab">高级工具</button>
         <button type="button" class="tab-button" data-tab-target="glossary-tab">术语与公式说明</button>
-        <button type="button" class="tab-button" data-tab-target="data-tab">数据导入导出</button>
+        <button type="button" class="tab-button" data-tab-target="data-tab">数据备份</button>
       </nav>
 
       <section id="guide-tab" class="tab-panel is-active">
         <div class="info-grid">
-          <article class="panel result-card">
-            <h2>给第一次使用的同学</h2>
-            <div class="guide-steps">
-              <p><strong>第 1 步：</strong>先到“报价卡管理”里新增报价卡，把货代报价整理成系统可计算的结构。</p>
-              <p><strong>第 2 步：</strong>回到“单 SKU 测算”或“批量 SKU 测算”，选择报价卡并运行计算。</p>
-              <p><strong>第 3 步：</strong>看利润、净利率、风险提示和 CFO 结论，不要只看最低运费。</p>
-              <p><strong>第 4 步：</strong>要和同事协作时，记得导出报价卡 JSON 和结果 CSV 备份。</p>
+          <article class="panel result-card accent">
+            <h2>先选择你要完成的任务</h2>
+            <div class="task-entry-grid">
+              <button type="button" class="task-entry" data-tab-target="single-tab">
+                <strong>单个产品测算</strong>
+                <span>输入一个产品，快速判断售价、利润和风险。</span>
+              </button>
+              <button type="button" class="task-entry" data-tab-target="batch-tab">
+                <strong>批量 SKU 测算</strong>
+                <span>上传产品表，一次性测算多个 SKU。</span>
+              </button>
+              <button type="button" class="task-entry" data-tab-target="quotes-tab">
+                <strong>新增 / 维护物流报价</strong>
+                <span>上传或录入货代报价，保存到报价库，后续反复使用。</span>
+              </button>
             </div>
           </article>
 
-          <article class="panel result-card accent">
-            <h2>这版 MVP 能做什么</h2>
-            <div class="metric-grid">
-              <div class="metric"><span>履约模式</span><strong>直邮空运 / 海运 / 本地 3PF / ML / Shopee</strong></div>
-              <div class="metric"><span>报价管理</span><strong>新增、编辑、复制、确认、禁用、导入导出</strong></div>
-              <div class="metric"><span>测算方式</span><strong>单 SKU、批量 SKU、多报价对比</strong></div>
-              <div class="metric"><span>数据保存</span><strong>本机浏览器 localStorage</strong></div>
+          <article class="panel result-card">
+            <h2>第一次使用建议这样走</h2>
+            <div class="guide-steps">
+              <p><strong>第 1 步：</strong>如果你还没有可用报价，先进入“新增 / 维护物流报价”。</p>
+              <p><strong>第 2 步：</strong>把报价保存到报价库后，再去“单个产品测算”。</p>
+              <p><strong>第 3 步：</strong>先看结论，再看成本拆解和风险提示。</p>
             </div>
           </article>
 
@@ -132,6 +139,10 @@
               <span>巴西收件 CEP</span>
               <input name="destination_cep" type="text" placeholder="例如 01001-001" />
               <small>如果知道巴西收件人 CEP，建议输入 CEP 自动匹配尾程区域；如果不知道，可以手动选择常见区域进行估算。</small>
+              <small>如果暂时只有巴西仓库地址，也可以先用仓库 CEP `07143-000` 做估算。当前货代表里它会匹配到 `SP-INT1`，但这只是估算，不代表最终收件人区域。</small>
+              <div class="button-row">
+                <button type="button" class="ghost-button" id="use-warehouse-cep">用巴西仓 CEP 07143-000 估算</button>
+              </div>
             </label>
             <label>
               <span>手动尾程区域</span>
@@ -372,6 +383,20 @@
           </form>
 
           <section class="results">
+            <article class="panel result-card result-toolbar-card">
+              <div class="result-toolbar">
+                <div>
+                  <h2>结果展示币种</h2>
+                  <p id="result-currency-note" class="summary-text">当前按人民币展示结果，美元和雷亚尔可切换查看。</p>
+                </div>
+                <div class="button-row">
+                  <button type="button" class="ghost-button result-currency-button is-active" data-result-currency="CNY">人民币</button>
+                  <button type="button" class="ghost-button result-currency-button" data-result-currency="USD">美元</button>
+                  <button type="button" class="ghost-button result-currency-button" data-result-currency="BRL">雷亚尔</button>
+                </div>
+              </div>
+            </article>
+
             <article class="panel result-card accent">
               <h2>利润总览</h2>
               <p id="single-conclusion" class="summary-text"></p>

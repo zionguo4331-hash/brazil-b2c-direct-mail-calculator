@@ -1,7 +1,172 @@
 import { createEmptyQuoteCard } from "./quote-cards.js";
 
+const SUPPORT_SHEET_NAME_PATTERNS = [
+  /寄件需知/i,
+  /托运条款/i,
+  /尾程派送报价/i,
+  /尾程价格测算/i,
+  /商业清关区域划分/i,
+  /巴西禁运表/i,
+  /异行件展示/i
+];
+
+function isSupportSheetName(sheetName = "") {
+  return SUPPORT_SHEET_NAME_PATTERNS.some((pattern) => pattern.test(sheetName));
+}
+
 function detectProductCodes(text) {
   return Array.from(new Set((text.match(/BR\d{4}/g) || [])));
+}
+
+function cellValue(row, columnName) {
+  return row?.cells?.find((cell) => cell.columnName === columnName)?.value?.trim() || "";
+}
+
+function parseWeightRange(text) {
+  const match = String(text || "").match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)/);
+  if (!match) {
+    return null;
+  }
+  return {
+    min_weight_kg: Number(match[1]),
+    max_weight_kg: Number(match[2]),
+    label: String(text || "")
+  };
+}
+
+function parseChineseDate(text) {
+  const match = String(text || "").match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (!match) {
+    return "";
+  }
+  const year = match[1];
+  const month = match[2].padStart(2, "0");
+  const day = match[3].padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parsePrcMainSheet(sheet) {
+  if (!sheet) {
+    return {
+      productCodes: [],
+      mainPrcRates: [],
+      handlingFeeTiers: [],
+      validFrom: ""
+    };
+  }
+
+  const productCodes = [];
+  const mainPrcRates = [];
+  const handlingFeeTiers = [];
+  const validFrom = parseChineseDate(sheet.rows.find((row) => /生效日期/.test(row.text))?.text || "");
+
+  for (const row of sheet.rows) {
+    const productCode = cellValue(row, "B").match(/BR\d{4}/)?.[0] || "";
+    const rateRangeText = cellValue(row, "D");
+    const rateWeight = parseWeightRange(rateRangeText);
+    const perKgValue = Number(cellValue(row, "E") || 0);
+    const handlingFeeText = cellValue(row, "F");
+    const handlingFeeNumber = extractFirstNumber(handlingFeeText);
+
+    if (productCode) {
+      productCodes.push(productCode);
+      if (perKgValue > 0) {
+        mainPrcRates.push({
+          product_code: productCode,
+          per_kg_cny: perKgValue
+        });
+      }
+    }
+
+    if (rateWeight && handlingFeeNumber !== null) {
+      handlingFeeTiers.push({
+        ...rateWeight,
+        fee_cny: handlingFeeNumber
+      });
+    }
+  }
+
+  return {
+    productCodes: Array.from(new Set(productCodes)),
+    mainPrcRates,
+    handlingFeeTiers,
+    validFrom
+  };
+}
+
+function parsePrcTailSheet(sheet) {
+  if (!sheet) {
+    return {
+      zones: [],
+      entries: []
+    };
+  }
+
+  const headerRow = sheet.rows.find((row) => row.cells?.some((cell) => /\b[A-Z]{2}-(?:CAP|INT\d?|RED)\b/i.test(cell.value || "")));
+  if (!headerRow) {
+    return { zones: [], entries: [] };
+  }
+
+  const zoneColumns = headerRow.cells
+    .filter((cell) => /\b[A-Z]{2}-(?:CAP|INT\d?|RED)\b/i.test(cell.value || ""))
+    .map((cell) => ({
+      columnName: cell.columnName,
+      zone: String(cell.value).trim().toUpperCase()
+    }));
+
+  const entries = [];
+  for (const row of sheet.rows) {
+    if (row.rowNumber <= headerRow.rowNumber) {
+      continue;
+    }
+    const minWeight = Number(cellValue(row, "B") || 0);
+    const maxWeight = Number(cellValue(row, "C") || 0);
+    if (!(maxWeight > 0)) {
+      continue;
+    }
+    for (const zoneColumn of zoneColumns) {
+      const fee = extractFirstNumber(cellValue(row, zoneColumn.columnName));
+      if (fee !== null) {
+        entries.push({
+          zone: zoneColumn.zone,
+          min_weight_kg: minWeight,
+          max_weight_kg: maxWeight,
+          fee_cny: fee
+        });
+      }
+    }
+  }
+
+  return {
+    zones: zoneColumns.map((item) => item.zone),
+    entries
+  };
+}
+
+function parsePrcPostalSheet(sheet) {
+  if (!sheet) {
+    return [];
+  }
+
+  const entries = [];
+  for (const row of sheet.rows) {
+    const postcodeStart = Number(cellValue(row, "E") || 0);
+    const postcodeEnd = Number(cellValue(row, "F") || 0);
+    const zone = cellValue(row, "G");
+    if (!(postcodeStart > 0 && postcodeEnd > 0 && zone)) {
+      continue;
+    }
+    entries.push({
+      city: cellValue(row, "A"),
+      state: cellValue(row, "B"),
+      state_code: cellValue(row, "C"),
+      region: cellValue(row, "D"),
+      postcode_start: postcodeStart,
+      postcode_end: postcodeEnd,
+      zone
+    });
+  }
+  return entries.sort((left, right) => left.postcode_start - right.postcode_start);
 }
 
 function parsePostalZoneRows(rows) {
@@ -30,6 +195,9 @@ function parseTailDeliveryRows(rows, currency, rates, warnings) {
   const zones = new Set();
   for (const row of rows) {
     const text = row.text;
+    if ((text.match(/\d{5}-?\d{3}|\d{8}/g) || []).length >= 2) {
+      continue;
+    }
     const zoneMatch = text.match(/\b[A-Z]{2}-(?:CAP|INT\d?)\b/i);
     const rangeMatch = text.match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)/);
     const numbers = text.match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
@@ -186,10 +354,21 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
     brl_to_usd: Number(options.brl_to_usd || 0)
   };
 
-  const productCodes = detectProductCodes(workbookText);
-  const postalEntries = parsePostalZoneRows(selectedSheets.flatMap((sheet) => sheet.rows));
-  const tailDelivery = parseTailDeliveryRows(selectedSheets.flatMap((sheet) => sheet.rows), "CNY", rates, warnings);
-  const mainPrcRates = parseMainPrcRates(selectedSheets.flatMap((sheet) => sheet.rows));
+  const prcMainSheet = selectedSheets.find((sheet) => /PRC专线报价/i.test(sheet.name));
+  const prcTailSheet = selectedSheets.find((sheet) => /尾程派送报价/i.test(sheet.name));
+  const prcPostalSheet = selectedSheets.find((sheet) => /商业清关区域划分/i.test(sheet.name));
+  const structuredPrcMain = parsePrcMainSheet(prcMainSheet);
+  const productCodes = structuredPrcMain.productCodes.length ? structuredPrcMain.productCodes : detectProductCodes(workbookText);
+  const postalEntries = parsePrcPostalSheet(prcPostalSheet).length
+    ? parsePrcPostalSheet(prcPostalSheet)
+    : parsePostalZoneRows(selectedSheets.flatMap((sheet) => sheet.rows));
+  const tailDelivery = parsePrcTailSheet(prcTailSheet).entries.length
+    ? parsePrcTailSheet(prcTailSheet)
+    : parseTailDeliveryRows(selectedSheets.flatMap((sheet) => sheet.rows), "CNY", rates, warnings);
+  const mainPrcRates = structuredPrcMain.mainPrcRates.length
+    ? structuredPrcMain.mainPrcRates
+    : parseMainPrcRates(selectedSheets.flatMap((sheet) => sheet.rows));
+  const hasCompositePrcSignals = Boolean(mainPrcRates.length || postalEntries.length || tailDelivery.entries.length);
 
   if (/PRC|商业清关|邮编|CEP|尾程|BR1001|BR1002|BR1006/i.test(workbookText) && (mainPrcRates.length || postalEntries.length || tailDelivery.entries.length)) {
     const packageCard = createEmptyQuoteCard({
@@ -207,6 +386,7 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
       available_product_codes: productCodes,
       selected_product_code: productCodes[0] || "",
       main_prc_rates: mainPrcRates,
+      handling_fee_tiers: structuredPrcMain.handlingFeeTiers,
       tail_delivery_matrix: {
         zones: tailDelivery.zones,
         weight_columns: [],
@@ -218,6 +398,7 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
       restriction_notes: /Device|Sexy|Sexual|Adult product|Battery/i.test(workbookText)
         ? ["系统检测到禁运/限制词，需业务确认货代是否书面允许承运。"]
         : [],
+      valid_from: structuredPrcMain.validFrom,
       notes: "由前端 Excel 预处理器识别为 PRC 复合报价包草稿，需人工确认。"
     });
 
@@ -229,6 +410,9 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
     }
     if (postalEntries.length) {
       extracted_fields.push("postal_zone_map");
+    }
+    if (structuredPrcMain.handlingFeeTiers.length) {
+      extracted_fields.push("handling_fee_tiers");
     }
     if (!mainPrcRates.length) {
       missing_fields.push("main_prc_rates");
@@ -253,6 +437,13 @@ export function ruleBasedQuoteExtractor(workbookData, options = {}) {
   }
 
   for (const sheet of selectedSheets) {
+    if (isSupportSheetName(sheet.name)) {
+      continue;
+    }
+    if (hasCompositePrcSignals && /PRC专线报价/i.test(sheet.name)) {
+      continue;
+    }
+
     const fullText = sheet.rows.map((row) => row.text).join("\n");
     const currency = detectCurrency(fullText) || "USD";
     const mode = detectMode(fullText);
